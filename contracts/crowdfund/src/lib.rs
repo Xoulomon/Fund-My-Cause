@@ -2,221 +2,15 @@
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec,
-};
+mod errors;
+mod storage;
+mod types;
 
-const CONTRACT_VERSION: u32 = 4;
+pub use errors::ContractError;
+pub use storage::{CONTRACT_VERSION, KEY_ADMIN, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_MIN, KEY_PLATFORM, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL};
+pub use types::{CampaignInfo, CampaignStats, DataKey, PlatformConfig, Status};
 
-// ── Storage Keys ──────────────────────────────────────────────────────────────
-const KEY_CREATOR: Symbol = symbol_short!("CREATOR");
-const KEY_TOKEN: Symbol = symbol_short!("TOKEN");
-const KEY_GOAL: Symbol = symbol_short!("GOAL");
-const KEY_DEADLINE: Symbol = symbol_short!("DEADLINE");
-const KEY_TOTAL: Symbol = symbol_short!("TOTAL");
-const KEY_CONTRIBS: Symbol = symbol_short!("CONTRIBS");
-const KEY_STATUS: Symbol = symbol_short!("STATUS");
-const KEY_MIN: Symbol = symbol_short!("MIN");
-const KEY_TITLE: Symbol = symbol_short!("TITLE");
-const KEY_DESC: Symbol = symbol_short!("DESC");
-const KEY_SOCIAL: Symbol = symbol_short!("SOCIAL");
-const KEY_PLATFORM: Symbol = symbol_short!("PLATFORM");
-const KEY_ADMIN: Symbol = symbol_short!("ADMIN");
-const KEY_CATEGORY: Symbol = symbol_short!("CATEG");
-const KEY_VESTING: Symbol = symbol_short!("VEST");
-const KEY_GOAL_HISTORY: Symbol = symbol_short!("GHIST");
-
-// ── Data Types ────────────────────────────────────────────────────────────────
-
-/// Campaign status enumeration.
-///
-/// Represents the lifecycle state of a crowdfunding campaign.
-#[derive(Clone, PartialEq, Debug)]
-#[contracttype]
-pub enum Status {
-    /// Campaign is accepting contributions
-    Active,
-    /// Campaign deadline passed and goal was reached
-    Successful,
-    /// Campaign deadline passed and goal was not reached (refunds available)
-    Refunded,
-    /// Campaign was cancelled by creator (refunds available)
-    Cancelled,
-    /// Campaign is temporarily paused (no new contributions allowed)
-    Paused,
-}
-
-/// Campaign category enumeration.
-///
-/// Predefined categories for campaign filtering and discovery.
-#[derive(Clone, PartialEq, Debug)]
-#[contracttype]
-pub enum Category {
-    Technology,
-    Health,
-    Education,
-    Arts,
-    Community,
-    Environment,
-    Other,
-}
-
-/// Vesting schedule for creator fund release.
-///
-/// Locks contributions with a vesting schedule (cliff + duration).
-#[derive(Clone)]
-#[contracttype]
-pub struct VestingSchedule {
-    /// Cliff period in seconds (funds locked until this time)
-    pub cliff: u64,
-    /// Total vesting duration in seconds
-    pub duration: u64,
-}
-
-/// Goal adjustment history entry.
-///
-/// Tracks when and to what value the goal was adjusted.
-#[derive(Clone)]
-#[contracttype]
-pub struct GoalAdjustment {
-    /// Previous goal amount
-    pub previous_goal: i128,
-    /// New goal amount
-    pub new_goal: i128,
-    /// Timestamp of adjustment
-    pub timestamp: u64,
-}
-
-/// Campaign statistics snapshot.
-///
-/// Contains aggregated metrics about campaign progress and contributor activity.
-#[derive(Clone)]
-#[contracttype]
-pub struct CampaignStats {
-    /// Total amount raised in stroops
-    pub total_raised: i128,
-    /// Campaign funding goal in stroops
-    pub goal: i128,
-    /// Progress as basis points (0-10000, where 10000 = 100%)
-    pub progress_bps: u32,
-    /// Number of unique contributors
-    pub contributor_count: u32,
-    /// Average contribution amount in stroops (total_raised / contributor_count)
-    pub average_contribution: i128,
-    /// Largest single contribution amount in stroops
-    pub largest_contribution: i128,
-}
-
-/// Platform fee configuration.
-///
-/// Specifies the address that receives platform fees and the fee percentage.
-#[derive(Clone, PartialEq, Debug)]
-#[contracttype]
-pub struct PlatformConfig {
-    /// Address that receives platform fees
-    pub address: Address,
-    /// Fee percentage in basis points (e.g., 250 = 2.5%)
-    pub fee_bps: u32,
-}
-
-/// Complete campaign information.
-///
-/// Contains all metadata and configuration for a campaign.
-#[derive(Clone)]
-#[contracttype]
-pub struct CampaignInfo {
-    /// Campaign creator's Stellar address
-    pub creator: Address,
-    /// Token address for contributions
-    pub token: Address,
-    /// Funding goal in stroops
-    pub goal: i128,
-    /// Campaign deadline as Unix timestamp (seconds)
-    pub deadline: u64,
-    /// Minimum contribution amount in stroops
-    pub min_contribution: i128,
-    /// Campaign title
-    pub title: String,
-    /// Campaign description
-    pub description: String,
-    /// Current campaign status
-    pub status: Status,
-    /// Whether a platform fee is configured
-    pub has_platform_config: bool,
-    /// Platform fee in basis points (0 if no config)
-    pub platform_fee_bps: u32,
-    /// Platform fee recipient address
-    pub platform_address: Address,
-    /// Campaign category
-    pub category: Category,
-}
-
-/// Storage key variants for contract data.
-///
-/// Used to organize persistent and instance storage in the contract.
-#[derive(Clone)]
-#[contracttype]
-pub enum DataKey {
-    /// Contribution amount for a specific address
-    Contribution(Address),
-    /// Whether an address has contributed (presence flag)
-    ContributorPresence(Address),
-    /// Total number of unique contributors
-    ContributorCount,
-    /// Largest single contribution amount
-    LargestContribution,
-    /// Whitelist of accepted token addresses
-    AcceptedTokens,
-    /// Penalty fee in basis points for early refunds
-    PenaltyBps,
-}
-
-// ── Contract Errors ───────────────────────────────────────────────────────────
-
-use soroban_sdk::contracterror;
-
-/// Contract error types.
-///
-/// Represents all possible error conditions that can occur during contract execution.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum ContractError {
-    /// Campaign has already been initialized
-    AlreadyInitialized = 1,
-    /// Campaign deadline has passed
-    CampaignEnded = 2,
-    /// Campaign deadline has not yet passed
-    CampaignStillActive = 3,
-    /// Campaign goal was not reached
-    GoalNotReached = 4,
-    /// Campaign goal was already reached
-    GoalReached = 5,
-    /// Arithmetic overflow occurred
-    Overflow = 6,
-    /// Campaign is not in Active status
-    NotActive = 7,
-    /// Platform fee is invalid (> 10,000 bps)
-    InvalidFee = 8,
-    /// Amount is below minimum contribution
-    BelowMinimum = 9,
-    /// Deadline is invalid
-    InvalidDeadline = 10,
-    /// Campaign is paused
-    CampaignPaused = 11,
-    /// Campaign goal is invalid (<= 0)
-    InvalidGoal = 12,
-    /// Token is not accepted by this campaign
-    TokenNotAccepted = 13,
-    /// Invalid category
-    InvalidCategory = 14,
-    /// Vesting period not yet complete
-    VestingNotComplete = 15,
-    /// Goal cannot be adjusted (contributions exist or goal increase attempted)
-    CannotAdjustGoal = 16,
-    /// Penalty fee is invalid
-    InvalidPenalty = 17,
-}
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -698,6 +492,58 @@ impl CrowdfundContract {
             env.events().publish(("campaign", "refunded"), (contributor, amount));
         }
         Ok(())
+    }
+
+    /// Refunds multiple contributors in a single transaction (batch refund).
+    ///
+    /// Processes refunds for a list of contributors. Stops early if the batch
+    /// limit is reached to avoid exceeding resource limits.
+    /// Each contributor is only refunded if eligible (same conditions as `refund_single`).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contributors` - List of contributor addresses to refund
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of contributors successfully refunded
+    /// * `Err(ContractError::CampaignStillActive)` if deadline not passed and not cancelled
+    /// * `Err(ContractError::GoalReached)` if goal was reached and campaign not cancelled
+    pub fn refund_batch(env: Env, contributors: Vec<Address>) -> Result<u32, ContractError> {
+        let status: Status = env.storage().instance().get(&KEY_STATUS).unwrap();
+
+        if status != Status::Cancelled {
+            let deadline: u64 = env.storage().instance().get(&KEY_DEADLINE).unwrap();
+            if env.ledger().timestamp() < deadline {
+                return Err(ContractError::CampaignStillActive);
+            }
+            let goal: i128 = env.storage().instance().get(&KEY_GOAL).unwrap();
+            let total: i128 = env.storage().instance().get(&KEY_TOTAL).unwrap();
+            if total >= goal {
+                return Err(ContractError::GoalReached);
+            }
+        }
+
+        let token_address: Address = env.storage().instance().get(&KEY_TOKEN).unwrap();
+        let token_client = token::Client::new(&env, &token_address);
+
+        // Cap batch size to avoid resource exhaustion
+        const MAX_BATCH: u32 = 25;
+        let limit = contributors.len().min(MAX_BATCH);
+        let mut refunded: u32 = 0;
+
+        for i in 0..limit {
+            let contributor = contributors.get(i).unwrap();
+            let key = DataKey::Contribution(contributor.clone());
+            let amount: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+            if amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &contributor, &amount);
+                env.storage().persistent().set(&key, &0i128);
+                env.events().publish(("campaign", "refunded"), (contributor, amount));
+                refunded += 1;
+            }
+        }
+
+        Ok(refunded)
     }
 
     /// Pauses the campaign, preventing new contributions.

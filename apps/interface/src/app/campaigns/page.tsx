@@ -1,105 +1,24 @@
-import React, { Suspense } from "react";
-import { Navbar } from "@/components/layout/Navbar";
-import { CampaignCard } from "@/components/ui/CampaignCard";
-import { fetchAllCampaigns } from "@/lib/soroban";
-import { fetchXlmPrice } from "@/lib/price";
-import type { Campaign } from "@/types/campaign";
-import { LoadingSkeletonGrid } from "@/components/ui/LoadingSkeleton";
-
-// ── Campaign grid (async server component) ────────────────────────────────────
-
-async function CampaignGrid() {
-  const [onChain, xlmPrice] = await Promise.all([fetchAllCampaigns(), fetchXlmPrice()]);
-
-  // Map on-chain data to Campaign shape; fall back to placeholder image
-  const campaigns: Campaign[] = onChain.map((c) => ({
-    id: c.contractId,
-    title: c.title,
-    description: c.description,
-    raised: c.raised,
-    goal: c.goal,
-    deadline: c.deadline,
-    image: "https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&q=80&w=800",
-    contractId: c.contractId,
-  }));
-
-  if (campaigns.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-32 text-center space-y-4">
-        <p className="text-5xl">🌱</p>
-        <h2 className="text-xl font-semibold text-white">No campaigns yet</h2>
-        <p className="text-gray-400 max-w-sm">
-          Be the first to launch a campaign on Fund-My-Cause and start raising funds on Stellar.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-      {campaigns.map((c) => <CampaignCard key={c.id} campaign={c} xlmPrice={xlmPrice} />)}
-    </div>
-  );
-}
-
-// ── Page ──────────────────────────────────────────────────────────────────────
 "use client";
 
 import React, { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { CampaignCard } from "@/components/ui/CampaignCard";
 import { PledgeModal } from "@/components/ui/PledgeModal";
+import { EmptyState, NoCampaignsIllustration } from "@/components/ui/EmptyState";
+import { LoadingSkeletonGrid } from "@/components/ui/LoadingSkeleton";
 import { Campaign } from "@/types/campaign";
-import { Search } from "lucide-react";
-
-// ── Mock data (replace with real fetch) ──────────────────────────────────────
-
-const ALL_CAMPAIGNS: Campaign[] = [
-  {
-    id: "1",
-    title: "Eco-Friendly Water Purification",
-    description: "A compact, solar-powered water purification system for off-grid communities.",
-    raised: 15400,
-    goal: 20000,
-    deadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-    image: "https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&q=80&w=800",
-  },
-  {
-    id: "2",
-    title: "Open Source AI Education Platform",
-    description: "Democratizing AI education with free, high-quality interactive courses for everyone.",
-    raised: 8200,
-    goal: 50000,
-    deadline: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString(),
-    image: "https://images.unsplash.com/photo-1555949963-aa79dcee5789?auto=format&fit=crop&q=80&w=800",
-  },
-  {
-    id: "3",
-    title: "Community Solar Microgrid",
-    description: "Empowering neighborhoods to generate and share sustainable solar energy.",
-    raised: 45000,
-    goal: 45000,
-    deadline: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-    image: "https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&fit=crop&q=80&w=800",
-  },
-  {
-    id: "4",
-    title: "Decentralized Medical Records",
-    description: "Secure, patient-owned health records on the Stellar blockchain.",
-    raised: 3000,
-    goal: 30000,
-    deadline: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    image: "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&q=80&w=800",
-  },
-];
+import { ALL_CAMPAIGNS } from "@/lib/campaigns";
+import { Search, GitCompare } from "lucide-react";
+import { useComparison } from "@/context/ComparisonContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type FilterTab = "all" | "active" | "funded" | "ended";
 type SortOption = "newest" | "most-funded" | "ending-soon";
 
-// ── Helpers ───────────────────────────────────────────────name────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getStatus(c: Campaign): FilterTab {
   const ended = new Date(c.deadline) < new Date();
@@ -117,7 +36,7 @@ function applySort(campaigns: Campaign[], sort: SortOption): Campaign[] {
   return [...campaigns].sort((a, b) => {
     if (sort === "most-funded") return b.raised / b.goal - a.raised / a.goal;
     if (sort === "ending-soon") return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
-    return Number(b.id) - Number(a.id); // newest = highest id
+    return Number(b.id) - Number(a.id);
   });
 }
 
@@ -135,6 +54,7 @@ const PAGE_SIZE = 9;
 function CampaignsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { selected, clear } = useComparison();
 
   const filter = (searchParams.get("filter") as FilterTab) ?? "all";
   const sort = (searchParams.get("sort") as SortOption) ?? "newest";
@@ -142,6 +62,7 @@ function CampaignsInner() {
   const page = Math.max(1, Number(searchParams.get("page") ?? "1"));
 
   const [pledge, setPledge] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState(query);
 
   const setParam = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -150,10 +71,17 @@ function CampaignsInner() {
     } else {
       params.set(key, value);
     }
-    // Reset to page 1 when filters change
     if (key !== "page") params.delete("page");
     router.replace(`/campaigns?${params.toString()}`, { scroll: false });
   };
+
+  React.useEffect(() => { setInputValue(query); }, [query]);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setParam("q", inputValue), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue]);
 
   const setPage = (p: number) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -167,7 +95,8 @@ function CampaignsInner() {
         (c) =>
           !query ||
           c.title.toLowerCase().includes(query.toLowerCase()) ||
-          c.description.toLowerCase().includes(query.toLowerCase()),
+          c.description.toLowerCase().includes(query.toLowerCase()) ||
+          c.creator.toLowerCase().includes(query.toLowerCase()),
       ),
       filter,
     ),
@@ -182,19 +111,17 @@ function CampaignsInner() {
     <>
       {/* Controls */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        {/* Search */}
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
             placeholder="Search campaigns..."
-            value={query}
-            onChange={(e) => setParam("q", e.target.value)}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            aria-label="Search campaigns"
             className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl pl-9 pr-4 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
-
-        {/* Sort */}
         <select
           value={sort}
           onChange={(e) => setParam("sort", e.target.value)}
@@ -207,11 +134,25 @@ function CampaignsInner() {
       </div>
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-8">
-        {FILTER_TABS.map((tab) => (
+      <div className="flex gap-2 mb-8" role="tablist" aria-label="Filter campaigns">
+        {FILTER_TABS.map((tab, idx) => (
           <button
             key={tab.value}
+            role="tab"
+            aria-selected={filter === tab.value}
+            tabIndex={filter === tab.value ? 0 : -1}
             onClick={() => setParam("filter", tab.value)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowRight") {
+                const next = FILTER_TABS[(idx + 1) % FILTER_TABS.length];
+                setParam("filter", next.value);
+                (e.currentTarget.parentElement?.children[(idx + 1) % FILTER_TABS.length] as HTMLElement)?.focus();
+              } else if (e.key === "ArrowLeft") {
+                const prev = FILTER_TABS[(idx - 1 + FILTER_TABS.length) % FILTER_TABS.length];
+                setParam("filter", prev.value);
+                (e.currentTarget.parentElement?.children[(idx - 1 + FILTER_TABS.length) % FILTER_TABS.length] as HTMLElement)?.focus();
+              }
+            }}
             className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${
               filter === tab.value
                 ? "bg-indigo-600 text-white"
@@ -225,21 +166,29 @@ function CampaignsInner() {
 
       {/* Grid */}
       {filtered.length === 0 ? (
-        <p className="text-center text-gray-500 py-20">No campaigns match your filters.</p>
+        <EmptyState
+          illustration={<NoCampaignsIllustration />}
+          title="No campaigns found"
+          description="Try adjusting your search or filters to find what you're looking for."
+          action={{ label: "Clear filters", onClick: () => router.replace("/campaigns") }}
+        />
       ) : (
         <>
-          <p className="text-sm text-gray-500 mb-4">{filtered.length} campaign{filtered.length !== 1 ? "s" : ""} found</p>
+          <p className="text-sm text-gray-500 mb-4">
+            {filtered.length} campaign{filtered.length !== 1 ? "s" : ""} found
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {paginated.map((campaign) => (
+            {paginated.map((campaign, i) => (
               <CampaignCard
                 key={campaign.id}
                 campaign={campaign}
                 onPledge={(id) => setPledge(id)}
+                index={i}
+                query={query}
               />
             ))}
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-4 mt-10">
               <button
@@ -249,9 +198,7 @@ function CampaignsInner() {
               >
                 Previous
               </button>
-              <span className="text-sm text-gray-400">
-                Page {currentPage} of {totalPages}
-              </span>
+              <span className="text-sm text-gray-400">Page {currentPage} of {totalPages}</span>
               <button
                 onClick={() => setPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
@@ -270,26 +217,36 @@ function CampaignsInner() {
           onClose={() => setPledge(null)}
         />
       )}
+
+      {/* Comparison floating bar */}
+      {selected.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-gray-900 border border-gray-700 rounded-2xl px-5 py-3 shadow-2xl">
+          <GitCompare size={16} className="text-indigo-400" />
+          <span className="text-sm text-gray-300">{selected.length} selected</span>
+          <Link
+            href="/compare"
+            className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-medium transition"
+          >
+            Compare
+          </Link>
+          <button onClick={clear} className="text-gray-500 hover:text-gray-300 text-xs transition">
+            Clear
+          </button>
+        </div>
+      )}
     </>
   );
 }
 
-// ── Page (Suspense boundary required for useSearchParams) ─────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CampaignsPage() {
   return (
     <main className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-white">
       <Navbar />
-      <section className="max-w-6xl mx-auto px-6 py-12">
-        <h1 className="text-3xl font-bold mb-8">Active Campaigns</h1>
-        <Suspense fallback={<LoadingSkeletonGrid count={6} />}>
-          {/* @ts-expect-error async server component */}
-          <CampaignGrid />
-        </Suspense>
-      </section>
       <div className="max-w-6xl mx-auto px-6 py-12">
         <h1 className="text-3xl font-bold mb-8">Campaigns</h1>
-        <Suspense fallback={<div className="text-gray-500 text-center py-20">Loading...</div>}>
+        <Suspense fallback={<LoadingSkeletonGrid count={6} />}>
           <CampaignsInner />
         </Suspense>
       </div>

@@ -13,10 +13,27 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { isValidContractId } from "@/lib/validation";
+import type {
+  CampaignStatus,
+  CampaignInfo,
+  CampaignStats,
+  CampaignData,
+  InitializeParams,
+} from "@/types/soroban";
+
+// Re-export types for backward compatibility
+export type {
+  CampaignStatus,
+  CampaignInfo,
+  CampaignStats,
+  CampaignData,
+  InitializeParams,
+} from "@/types/soroban";
 
 const SOROBAN_RPC_URL =
   process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
   "https://soroban-testnet.stellar.org";
+const RPC_URL = SOROBAN_RPC_URL;
 const HORIZON_URL =
   process.env.NEXT_PUBLIC_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 const NETWORK_PASSPHRASE = Networks.TESTNET;
@@ -35,63 +52,6 @@ const VALID_STATUSES = [
   "Cancelled",
   "Paused",
 ] as const;
-
-export type CampaignStatus = (typeof VALID_STATUSES)[number];
-
-export interface InitializeParams {
-  contractId: string;
-  creator: string;
-  token: string;
-  goal: bigint;
-  deadline: bigint;
-  minContribution: bigint;
-  title: string;
-  description: string;
-  socialLinks?: string[];
-  acceptedTokens?: string[];
-  platformFeeAddress?: string;
-  platformFeeBps?: number;
-}
-
-export interface CampaignInfo {
-  contractId: string;
-  creator: string;
-  token: string;
-  goal: bigint;
-  deadline: bigint;
-  minContribution: bigint;
-  title: string;
-  description: string;
-  status: CampaignStatus;
-  hasPlatformConfig: boolean;
-  platformFeeBps: number;
-  platformAddress: string;
-  socialLinks: string[];
-  acceptedTokens?: string[];
-}
-
-export interface CampaignStats {
-  totalRaised: bigint;
-  goal: bigint;
-  progressBps: number;
-  contributorCount: number;
-  averageContribution: bigint;
-  largestContribution: bigint;
-}
-
-export interface CampaignData {
-  contractId: string;
-  title: string;
-  description: string;
-  raised: number;
-  goal: number;
-  deadline: string;
-  creator: string;
-  socialLinks: string[];
-  contributorCount: number;
-  averageContribution: number;
-  status: CampaignStatus;
-}
 
 function toRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -134,6 +94,14 @@ function toBooleanValue(value: unknown, fallback = false): boolean {
 function toStringArrayValue(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => toStringValue(item)).filter(Boolean);
+}
+
+function stroopsToXlm(stroops: bigint): number {
+  return Number(stroops) / 1e7;
+}
+
+function ledgerTimestampToIso(ts: bigint): string {
+  return new Date(Number(ts) * 1000).toISOString();
 }
 
 function normalizeStatus(value: unknown): CampaignStatus {
@@ -285,6 +253,36 @@ export async function fetchContribution(
   }
 }
 
+export interface ContributorEntry {
+  address: string;
+  amount: bigint; // stroops
+}
+
+/**
+ * Fetches a paginated page of contributors via the contract's `contributor_list` view.
+ * Returns an empty array if the contract doesn't support the function.
+ */
+export async function fetchContributorList(
+  contractId: string,
+  page = 0,
+  pageSize = 10,
+): Promise<ContributorEntry[]> {
+  if (!isValidContractId(contractId)) return [];
+  try {
+    const result = await simulateView(contractId, "contributor_list", [
+      nativeToScVal(page, { type: "u32" }),
+      nativeToScVal(pageSize, { type: "u32" }),
+    ]);
+    if (!Array.isArray(result)) return [];
+    return (result as [string, unknown][]).map(([addr, amt]) => ({
+      address: String(addr),
+      amount: toBigIntValue(amt),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchAllCampaigns(): Promise<CampaignData[]> {
   if (CONTRACT_IDS.length === 0) return [];
 
@@ -297,6 +295,14 @@ export async function fetchAllCampaigns(): Promise<CampaignData[]> {
         result.status === "fulfilled",
     )
     .map((result) => result.value);
+}
+
+/**
+ * Returns all known campaign contract IDs for static generation.
+ * Used by Next.js generateStaticParams.
+ */
+export function getStaticCampaignIds(): string[] {
+  return [...CONTRACT_IDS];
 }
 
 export async function fetchCampaignData(
@@ -406,8 +412,19 @@ async function buildSimpleContractTx(
 export const buildWithdrawTx = (caller: string, contractId: string) =>
   buildSimpleContractTx(caller, contractId, "withdraw");
 
-export const buildCancelTx = (caller: string, contractId: string) =>
-  buildSimpleContractTx(caller, contractId, "cancel_campaign");
+export const buildCancelTx = (caller: string, contractId: string, reason?: string) =>
+  buildSimpleContractTx(
+    caller,
+    contractId,
+    "cancel_campaign",
+    reason ? [nativeToScVal(reason, { type: "string" })] : [],
+  );
+
+export const buildPauseTx = (caller: string, contractId: string) =>
+  buildSimpleContractTx(caller, contractId, "pause");
+
+export const buildUnpauseTx = (caller: string, contractId: string) =>
+  buildSimpleContractTx(caller, contractId, "unpause");
 
 export async function buildRefundTx(
   caller: string,
@@ -608,3 +625,44 @@ function parseContributeAmount(op: HorizonOperation): number | null {
   // still appears (amount shown as "—")
   return 0;
 }
+
+/**
+ * Fetch up to `limit` contribution records for a campaign contract via Horizon.
+ * Pass limit=0 to fetch all available records (up to Horizon's page cap of 200).
+ */
+export async function fetchTransactionHistory(
+  contractId: string,
+  limit = 10,
+): Promise<ContributionRecord[]> {
+  try {
+    const url =
+      `${HORIZON_URL}/accounts/${contractId}/operations` +
+      `?order=desc&limit=${limit > 0 ? Math.min(limit, 200) : 200}&include_failed=false`;
+
+    const res = await fetch(url);
+    if (!res.ok) return [];
+
+    const page: HorizonOperationsPage = await res.json();
+    const ops = page._embedded?.records ?? [];
+
+    const records: ContributionRecord[] = [];
+    for (const op of ops) {
+      if (op.type !== "invoke_host_function") continue;
+      const amount = parseContributeAmount(op);
+      if (amount === null) continue;
+      records.push({
+        txHash: op.transaction_hash,
+        contributor: op.source_account,
+        amountXlm: amount,
+        timestamp: op.created_at,
+      });
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// ── RPC URL alias ─────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { PledgeModal } from "@/components/ui/PledgeModal";
 import { TransactionStatus, TxStatus } from "@/components/ui/TransactionStatus";
-import { withdraw, refundSingle, getCampaignStats } from "@/lib/contract";
+import { withdraw, refundSingle, getCampaignStats, pauseCampaign, unpauseCampaign } from "@/lib/contract";
 import {
   fetchContribution,
   buildWithdrawTx,
@@ -12,8 +12,7 @@ import {
   submitSignedTx,
   buildRefundTx,
   type CampaignStatus 
-} from "@/lib/soroban";
-import { useToast } from "@/components/ui/Toast";
+} from "@/lib/soroban";import { useNotifications } from "@/context/NotificationContext";
 
 interface Props {
   contractId: string;
@@ -21,12 +20,15 @@ interface Props {
   deadlinePassed: boolean;
   goalMet: boolean;
   campaignTitle: string;
-  status: "Active" | "Successful" | "Refunded" | "Cancelled";
   /** Total raised in XLM — used to display payout amount after withdraw. */
   raisedXlm?: number;
   /** Minimum contribution in stroops. */
   minContribution?: bigint;
   status: CampaignStatus;
+  /** Called with contribution amount (XLM) immediately on submit for optimistic UI */
+  onOptimisticContribute?: (amountXlm: number) => void;
+  /** Called on tx failure to roll back optimistic update */
+  onRollbackOptimistic?: () => void;
 }
 
 type ActionStatus = "idle" | "simulating" | "signing" | "submitting" | "done" | "error";
@@ -40,8 +42,11 @@ export function CampaignActions({
   status: initialStatus,
   raisedXlm = 0,
   minContribution,
+  onOptimisticContribute,
+  onRollbackOptimistic,
 }: Props) {
   const { address, connect, signTx, networkMismatch } = useWallet();
+  const { addNotification } = useNotifications();
   const [pledging, setPledging] = useState(false);
   const [userContribution, setUserContribution] = useState(0);
   const [campaignStatus, setCampaignStatus] = useState(initialStatus);
@@ -52,7 +57,6 @@ export function CampaignActions({
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [txHash, setTxHash] = useState("");
   const [txError, setTxError] = useState("");
-  const { addToast } = useToast();
 
   useEffect(() => {
     if (address) {
@@ -68,7 +72,10 @@ export function CampaignActions({
     isCreator &&
     (campaignStatus === "Successful" || (deadlinePassed && goalMet && campaignStatus === "Active"));
   const canRefund =
-    !!address && deadlinePassed && !goalMet && userContribution > 0 && campaignStatus !== "Refunded";
+    !!address &&
+    userContribution > 0 &&
+    campaignStatus !== "Refunded" &&
+    (campaignStatus === "Cancelled" || (deadlinePassed && !goalMet));
 
   async function handleWithdraw() {
     if (!address || pendingTx) return;
@@ -136,7 +143,17 @@ export function CampaignActions({
   async function handlePledgeSuccess() {
     try {
       const stats = await getCampaignStats(contractId);
-      setRaised(Number(stats.totalRaised) / 1e7);
+      const newRaised = Number(stats.totalRaised) / 1e7;
+      setRaised(newRaised);
+      // Notify if this pledge pushed the campaign over the goal
+      if (stats.totalRaised >= stats.goal) {
+        addNotification({
+          type: "goal_reached",
+          title: "Goal Reached! 🎉",
+          message: `"${campaignTitle}" has been fully funded with ${newRaised.toLocaleString()} XLM!`,
+          campaignId: contractId,
+        });
+      }
     } catch {
       // non-critical
     }
@@ -169,9 +186,20 @@ export function CampaignActions({
           <button
             onClick={() => (address ? setPledging(true) : connect())}
             disabled={networkMismatch || isProcessing}
+            aria-label={address ? `Pledge to ${campaignTitle}` : "Connect wallet to pledge"}
             className="w-full py-3 rounded-xl font-medium bg-indigo-600 hover:bg-indigo-500 transition text-white disabled:opacity-50"
           >
             {address ? "Pledge Now" : "Connect Wallet to Pledge"}
+          </button>
+        )}
+
+        {/* Paused — contributions disabled */}
+        {campaignStatus === "Paused" && (
+          <button
+            disabled
+            className="w-full py-3 rounded-xl font-medium bg-slate-700 text-slate-400 cursor-not-allowed opacity-60"
+          >
+            Contributions Paused
           </button>
         )}
 
@@ -180,6 +208,7 @@ export function CampaignActions({
           <button
             onClick={handleRefund}
             disabled={isProcessing}
+            aria-label={`Claim refund of ${userContribution.toLocaleString()} XLM`}
             className="w-full py-3 rounded-xl font-medium bg-yellow-600 hover:bg-yellow-500 transition text-white disabled:opacity-50"
           >
             Claim Refund ({userContribution.toLocaleString()} XLM)
@@ -191,10 +220,42 @@ export function CampaignActions({
           <button
             onClick={handleWithdraw}
             disabled={isProcessing}
+            aria-label="Withdraw campaign funds"
             className="w-full py-3 rounded-xl font-medium bg-green-600 hover:bg-green-500 transition text-white disabled:opacity-50"
           >
             Withdraw Funds
           </button>
+        )}
+
+        {/* Admin: Pause campaign */}
+        {isCreator && campaignStatus === "Active" && !deadlinePassed && (
+          <button
+            onClick={handlePause}
+            disabled={isProcessing}
+            aria-label="Pause campaign"
+            className="w-full py-2 rounded-xl font-medium text-sm bg-orange-600 hover:bg-orange-500 transition text-white disabled:opacity-50"
+          >
+            Pause Campaign
+          </button>
+        )}
+
+        {/* Admin: Unpause campaign */}
+        {isCreator && campaignStatus === "Paused" && (
+          <button
+            onClick={handleUnpause}
+            disabled={isProcessing}
+            aria-label="Resume campaign"
+            className="w-full py-2 rounded-xl font-medium text-sm bg-blue-600 hover:bg-blue-500 transition text-white disabled:opacity-50"
+          >
+            Resume Campaign
+          </button>
+        )}
+
+        {/* Paused notice for non-admin */}
+        {!isCreator && campaignStatus === "Paused" && (
+          <p className="text-center text-sm text-orange-500 py-2">
+            This campaign is currently paused. Contributions are temporarily disabled.
+          </p>
         )}
       </div>
 
@@ -205,6 +266,8 @@ export function CampaignActions({
           minContribution={minContribution}
           onClose={() => setPledging(false)}
           onSuccess={handlePledgeSuccess}
+          onOptimisticContribute={onOptimisticContribute}
+          onRollbackOptimistic={onRollbackOptimistic}
         />
       )}
     </>

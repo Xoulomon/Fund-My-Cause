@@ -17,58 +17,12 @@ import {
 } from "@stellar/stellar-sdk";
 import { CONTRACT_ID, RPC_URL, NETWORK_PASSPHRASE, HORIZON_URL } from "@/lib/constants";
 import { isValidContractId } from "@/lib/validation";
+import type { SignFn } from "@/types/contract";
+import { ContractError } from "@/types/contract";
 
-/**
- * Wallet signing function type.
- * @typedef {Function} SignFn
- * @param {string} xdr - Transaction XDR to sign
- * @returns {Promise<string>} Signed transaction XDR
- */
-export type SignFn = (xdr: string) => Promise<string>;
-
-/**
- * Error thrown when a contract call fails.
- * @class ContractError
- * @extends {Error}
- */
-export class ContractError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ContractError";
-  }
-}
-
-/**
- * High-level campaign metadata returned by the contract.
- * @interface CampaignInfo
- * @property {string} title - Campaign title
- * @property {string} description - Campaign description
- * @property {string} creator - Creator's Stellar public key
- * @property {bigint} goal - Goal amount in stroops (1 XLM = 10_000_000 stroops)
- * @property {bigint} deadline - Deadline as a Unix timestamp (seconds)
- * @property {bigint} minContribution - Minimum contribution in stroops
- */
-export interface CampaignInfo {
-  title: string;
-  description: string;
-  creator: string;
-  goal: bigint;
-  deadline: bigint;
-  minContribution: bigint;
-}
-
-/**
- * Live campaign statistics returned by get_stats.
- * @interface CampaignStats
- * @property {bigint} totalRaised - Total raised in stroops
- * @property {number} progressPercent - Progress as a percentage (progress_bps / 100)
- * @property {number} contributorCount - Number of unique contributors
- */
-export interface CampaignStats {
-  totalRaised: bigint;
-  progressPercent: number;
-  contributorCount: number;
-}
+// Re-export types for backward compatibility
+export type { SignFn } from "@/types/contract";
+export { ContractError } from "@/types/contract";
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -290,4 +244,65 @@ export async function refundSingle(
     [new Address(contributor).toScVal()],
     signTx,
   );
+}
+
+/**
+ * Refunds multiple contributors in a single transaction (batch refund).
+ * The contract caps the batch at 25 contributors per call.
+ * @param {string} contractId - The Soroban contract address
+ * @param {string} caller - The caller's Stellar public key (any authorized address)
+ * @param {string[]} contributors - List of contributor addresses to refund
+ * @param {SignFn} signTx - Wallet signing function
+ * @returns {Promise<string>} Transaction hash on success
+ * @throws {ContractError} If batch refund fails
+ */
+export async function refundBatch(
+  contractId: string,
+  caller: string,
+  contributors: string[],
+  signTx: SignFn,
+): Promise<string> {
+  const { xdr } = await import("@stellar/stellar-sdk");
+  const contributorVec = xdr.ScVal.scvVec(
+    contributors.map((addr) => new Address(addr).toScVal()),
+  );
+  return invokeContract(
+    caller,
+    contractId,
+    "refund_batch",
+    [contributorVec],
+    signTx,
+  );
+}
+
+/**
+ * Pauses the campaign, blocking new contributions. Admin only.
+ * @param {string} contractId - The Soroban contract address
+ * @param {string} admin - The admin's Stellar public key
+ * @param {SignFn} signTx - Wallet signing function
+ * @returns {Promise<string>} Transaction hash on success
+ * @throws {ContractError} If pause fails
+ */
+export async function pauseCampaign(
+  contractId: string,
+  admin: string,
+  signTx: SignFn,
+): Promise<string> {
+  return invokeContract(admin, contractId, "pause", [], signTx);
+}
+
+/**
+ * Resumes a paused campaign, allowing contributions again. Admin only.
+ * @param {string} contractId - The Soroban contract address
+ * @param {string} admin - The admin's Stellar public key
+ * @param {SignFn} signTx - Wallet signing function
+ * @returns {Promise<string>} Transaction hash on success
+ * @throws {ContractError} If unpause fails
+ */
+export async function unpauseCampaign(
+  contractId: string,
+  admin: string,
+  signTx: SignFn,
+): Promise<string> {
+  return invokeContract(admin, contractId, "unpause", [], signTx);
 }

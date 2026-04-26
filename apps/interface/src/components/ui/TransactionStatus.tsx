@@ -44,9 +44,9 @@ export function TransactionStatus({ status, txHash, errorMessage, onDismiss }: T
   if (status === "idle") return null;
 
   return (
-    <div className="space-y-4 p-4 bg-gray-800/50 rounded-xl">
+    <div className="space-y-4 p-4 bg-gray-800/50 rounded-xl" aria-live="polite" aria-atomic="true">
       {/* Steps */}
-      <div className="flex items-center justify-between">
+      <ol className="flex items-center justify-between" aria-label="Transaction steps">
         {steps.map((step, index) => {
           const Icon = step.icon;
           const isCompleted = index < currentIndex;
@@ -59,7 +59,7 @@ export function TransactionStatus({ status, txHash, errorMessage, onDismiss }: T
               status === "confirming");
 
           return (
-            <div key={step.key} className="flex items-center">
+            <li key={step.key} className="flex items-center" aria-label={`${step.label}: ${isCompleted ? "completed" : isCurrent ? "in progress" : "pending"}`}>
               <div
                 className={`flex items-center gap-2 ${
                   isCompleted
@@ -85,10 +85,10 @@ export function TransactionStatus({ status, txHash, errorMessage, onDismiss }: T
                   }`}
                 />
               )}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
 
       {/* Final state */}
       {status === "success" && (
@@ -101,6 +101,7 @@ export function TransactionStatus({ status, txHash, errorMessage, onDismiss }: T
                 href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-label="View transaction on Stellar Expert (opens in new tab)"
                 className="text-sm text-indigo-400 hover:underline"
               >
                 View on Stellar Expert →
@@ -120,6 +121,7 @@ export function TransactionStatus({ status, txHash, errorMessage, onDismiss }: T
           {onDismiss && (
             <button
               onClick={onDismiss}
+              aria-label="Dismiss transaction error"
               className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm"
             >
               Dismiss
