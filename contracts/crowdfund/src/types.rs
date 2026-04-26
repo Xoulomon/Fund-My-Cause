@@ -85,6 +85,8 @@ pub struct CampaignInfo {
     pub platform_fee_bps: u32,
     /// Platform fee recipient address
     pub platform_address: Address,
+    /// Campaign category
+    pub category: Category,
 }
 
 /// Campaign update entry with IPFS hash and timestamp.
@@ -121,6 +123,68 @@ pub struct MatchingConfig {
     pub max_match: i128,
 }
 
+/// Campaign template type.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[contracttype]
+pub enum TemplateType {
+    /// Charity/nonprofit fundraising
+    Charity,
+    /// Product launch or development
+    Product,
+    /// Event or conference
+    Event,
+    /// Personal cause
+    Personal,
+    /// Custom template
+    Custom,
+}
+
+/// Campaign category.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[contracttype]
+pub enum Category {
+    /// Charity/nonprofit
+    Charity,
+    /// Technology
+    Technology,
+    /// Creative
+    Creative,
+    /// Event
+    Event,
+    /// Personal
+    Personal,
+    /// Other
+    Other,
+}
+
+/// Campaign template configuration.
+#[derive(Clone)]
+#[contracttype]
+pub struct CampaignTemplate {
+    /// Template type
+    pub template_type: TemplateType,
+    /// Template name
+    pub name: String,
+    /// Template description
+    pub description: String,
+    /// Suggested minimum contribution
+    pub suggested_min: i128,
+    /// Suggested goal multiplier (e.g., 10000 = 1x)
+    pub goal_multiplier: u32,
+}
+
+/// Delegation configuration.
+#[derive(Clone)]
+#[contracttype]
+pub struct Delegation {
+    /// Delegated amount in stroops
+    pub amount: i128,
+    /// Delegate address
+    pub delegate: Address,
+    /// Whether delegation is active
+    pub active: bool,
+}
+
 /// Storage key variants for contract data.
 ///
 /// Used to organize persistent and instance storage in the contract.
@@ -149,6 +213,38 @@ pub enum DataKey {
     ExtensionVote(Address),
     /// Partial refund amount for a specific address
     PartialRefund(Address),
+    /// Whitelist of allowed contributors
+    Whitelist(Address),
+    /// Blacklist of blocked contributors
+    Blacklist(Address),
+    /// Whether whitelist-only mode is enabled
+    WhitelistOnly,
+    /// Delegation for a specific address
+    Delegation(Address),
+    /// Delegated contributions for a specific address
+    DelegatedContribution(Address),
+    /// Campaign template
+    Template,
+    /// Rate limit timestamp for a specific address
+    RateLimitTimestamp(Address),
+    /// Rate limit amount for a specific address
+    RateLimitAmount(Address),
+    /// Anonymous contribution flag
+    AnonymousContribution(Address),
+    /// Emergency lock time
+    EmergencyLockTime,
+    /// Matching configuration
+    MatchingConfig,
+    /// Total matched amount
+    TotalMatched,
+    /// Vesting schedule
+    Vesting,
+    /// Goal history
+    GoalHistory,
+    /// Penalty basis points
+    PenaltyBps,
+    /// Category
+    Category,
 }
 
 /// Recurring contribution plan.
@@ -185,4 +281,26 @@ pub struct ExtensionProposal {
     pub voting_ends_at: u64,
     /// Whether the proposal has been executed
     pub executed: bool,
+}
+
+/// Vesting schedule for campaign payouts.
+#[derive(Clone)]
+#[contracttype]
+pub struct VestingSchedule {
+    /// Cliff time (Unix timestamp) - funds locked until this time
+    pub cliff: u64,
+    /// Vesting duration in seconds after cliff
+    pub duration: u64,
+}
+
+/// Goal adjustment history entry.
+#[derive(Clone)]
+#[contracttype]
+pub struct GoalAdjustment {
+    /// Previous goal amount
+    pub previous_goal: i128,
+    /// New goal amount
+    pub new_goal: i128,
+    /// Timestamp of adjustment
+    pub timestamp: u64,
 }
